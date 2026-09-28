@@ -1,0 +1,46 @@
+# Go binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Build output
+bin/
+dist/
+
+# Test / coverage output
+*.test
+coverage.out
+coverage.html
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE / editor files
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Go workspace
+go.work
+go.work.sum
+
+# Local data
+data/
+tmp/
+
+# Redis local data
+redis/data/
