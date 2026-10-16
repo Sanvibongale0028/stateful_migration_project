@@ -12,6 +12,11 @@ type Config struct {
 	Capacity   float64
 	RefillRate float64
 	Role       string
+	InstanceID string
+	BackendURL string
+
+	EventReportingURL string
+	MachineID         string
 }
 
 func Load() Config {
@@ -35,6 +40,23 @@ func Load() Config {
 		Role: getEnv(
 			"RATE_LIMITER_ROLE",
 			"primary",
+		),
+
+		InstanceID: getEnv(
+			"RATE_LIMITER_INSTANCE_ID",
+			"rate-limiter-unknown",
+		),
+
+		BackendURL: getEnv("BACKEND_URL", "http://localhost:8080"),
+
+		EventReportingURL: getEnv(
+			"EVENT_REPORTING_URL",
+			"http://localhost:8080/events",
+		),
+
+		MachineID: getEnv(
+			"MACHINE_ID",
+			"machine-01",
 		),
 	}
 }

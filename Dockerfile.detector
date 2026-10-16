@@ -1,0 +1,18 @@
+FROM golang:1.27 AS builder
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build -o failure-detector ./cmd/detector-test
+
+FROM alpine:3.22
+
+WORKDIR /app
+
+COPY --from=builder /app/failure-detector /app/failure-detector
+
+CMD ["/app/failure-detector"]
