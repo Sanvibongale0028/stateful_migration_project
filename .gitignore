@@ -44,3 +44,8 @@ tmp/
 
 # Redis local data
 redis/data/
+
+# Test scripts and test files
+test-*.sh
+test_*.sh
+*_test.go
