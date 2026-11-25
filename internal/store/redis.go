@@ -10,7 +10,7 @@ import (
 
 const (
 	primaryLeaseKey = "rate_limiter:primary"
-	primaryLeaseTTL = 10 * time.Second
+	primaryLeaseTTL = 6 * time.Second
 )
 
 // Atomically renews the lease only if this instance still owns it.

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"ecommerce-rate-limiter/internal/limiter"
+	"ecommerce-rate-limiter/internal/logging"
 	"ecommerce-rate-limiter/internal/store"
 )
 
@@ -43,10 +45,10 @@ func NewHandler(
 }
 
 func (h *Handler) IsPrimary() bool {
-    h.RoleMutex.RLock()
-    defer h.RoleMutex.RUnlock()
+	h.RoleMutex.RLock()
+	defer h.RoleMutex.RUnlock()
 
-    return h.ServiceRole == "primary"
+	return h.ServiceRole == "primary"
 }
 
 func (h *Handler) Health(
@@ -70,6 +72,10 @@ func (h *Handler) Check(
 	w http.ResponseWriter,
 	r *http.Request,
 ) {
+	reqID := logging.GetRequestID(r)
+	r.Header.Set("X-Request-ID", reqID)
+	requestStart := time.Now()
+
 	role := h.GetRole()
 
 	if role != "primary" {
@@ -114,6 +120,21 @@ func (h *Handler) Check(
 		return
 	}
 
+	_ = logging.Log(
+		"RATE-LIMITER",
+		h.InstanceID,
+		"request_received",
+		"INFO",
+		"incoming rate limit request",
+		map[string]string{
+			"req_id":   reqID,
+			"user_id":  clientID,
+			"path":     r.URL.Path,
+			"resource": resource,
+			"from":     "client",
+		},
+	)
+
 	key := limiter.BuildKey(
 		clientID,
 		resource,
@@ -144,6 +165,36 @@ func (h *Handler) Check(
 
 		w.Header().Set("Retry-After", "1")
 
+		_ = logging.Log(
+			"RATE-LIMITER",
+			h.InstanceID,
+			"threshold_reached",
+			"WARN",
+			"user rate limit bucket exhausted",
+			map[string]string{
+				"req_id":           reqID,
+				"user_id":          clientID,
+				"path":             r.URL.Path,
+				"resource":         resource,
+				"remaining_tokens": fmt.Sprint(result.Remaining),
+			},
+		)
+
+		_ = logging.Log(
+			"RATE-LIMITER",
+			h.InstanceID,
+			"response_sent",
+			"INFO",
+			"rate limit rejected",
+			map[string]string{
+				"req_id":      reqID,
+				"user_id":     clientID,
+				"path":        r.URL.Path,
+				"status":      "429",
+				"duration_ms": fmt.Sprint(time.Since(requestStart).Milliseconds()),
+			},
+		)
+
 		w.WriteHeader(
 			http.StatusTooManyRequests,
 		)
@@ -157,6 +208,21 @@ func (h *Handler) Check(
 
 		return
 	}
+
+	_ = logging.Log(
+		"RATE-LIMITER",
+		h.InstanceID,
+		"response_sent",
+		"INFO",
+		"rate limit allowed",
+		map[string]string{
+			"req_id":      reqID,
+			"user_id":     clientID,
+			"path":        r.URL.Path,
+			"status":      "200",
+			"duration_ms": fmt.Sprint(time.Since(requestStart).Milliseconds()),
+		},
+	)
 
 	json.NewEncoder(w).Encode(
 		map[string]interface{}{
@@ -237,6 +303,20 @@ func (h *Handler) Promote(
 
 	ctx := r.Context()
 
+	failoverStart := time.Now()
+
+	// _ = logging.Log(
+	// 	"FAILOVER",
+	// 	h.InstanceID,
+	// 	"failover_started",
+	// 	"INFO",
+	// 	"shadow instance promotion started",
+	// 	map[string]string{
+	// 		"layer":  "RATE-LIMITER",
+	// 		"target": h.InstanceID,
+	// 	},
+	// )
+
 	acquired, err := h.RedisStore.AcquirePrimary(
 		ctx,
 		h.InstanceID,
@@ -279,6 +359,19 @@ func (h *Handler) Promote(
 		h.StartLeaseRenewal()
 	}
 
+	_ = logging.Log(
+		"FAILOVER",
+		h.InstanceID,
+		"failover_complete",
+		"INFO",
+		"shadow successfully promoted to primary",
+		map[string]string{
+			"layer":             "RATE-LIMITER",
+			"promoted_instance": h.InstanceID,
+			"duration_ms":       fmt.Sprint(time.Since(failoverStart).Milliseconds()),
+		},
+	)
+
 	w.Header().Set(
 		"Content-Type",
 		"application/json",
@@ -295,46 +388,46 @@ func (h *Handler) Promote(
 }
 
 func (h *Handler) Demote(w http.ResponseWriter, r *http.Request) {
-    h.RoleMutex.Lock()
+	h.RoleMutex.Lock()
 
-    if h.ServiceRole == "shadow" {
-        h.RoleMutex.Unlock()
+	if h.ServiceRole == "shadow" {
+		h.RoleMutex.Unlock()
 
-        w.Header().Set("Content-Type", "application/json")
-        w.WriteHeader(http.StatusOK)
-        json.NewEncoder(w).Encode(map[string]interface{}{
-            "status": "already_shadow",
-            "role":   "shadow",
-            "active": false,
-        })
-        return
-    }
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "already_shadow",
+			"role":   "shadow",
+			"active": false,
+		})
+		return
+	}
 
-    h.ServiceRole = "shadow"
-    h.RoleMutex.Unlock()
+	h.ServiceRole = "shadow"
+	h.RoleMutex.Unlock()
 
-    // Immediately release the Redis primary lease.
-    ctx := context.Background()
+	// Immediately release the Redis primary lease.
+	ctx := context.Background()
 
-    if err := h.RedisStore.ReleasePrimary(ctx, h.InstanceID); err != nil {
-        log.Printf("Failed to release primary lease during demotion: %v", err)
+	if err := h.RedisStore.ReleasePrimary(ctx, h.InstanceID); err != nil {
+		log.Printf("Failed to release primary lease during demotion: %v", err)
 
-        http.Error(
-            w,
-            `{"status":"demotion_failed","error":"failed to release primary lease"}`,
-            http.StatusInternalServerError,
-        )
-        return
-    }
+		http.Error(
+			w,
+			`{"status":"demotion_failed","error":"failed to release primary lease"}`,
+			http.StatusInternalServerError,
+		)
+		return
+	}
 
-    w.Header().Set("Content-Type", "application/json")
-    w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 
-    json.NewEncoder(w).Encode(map[string]interface{}{
-        "status": "demoted",
-        "role":   "shadow",
-        "active": false,
-    })
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "demoted",
+		"role":   "shadow",
+		"active": false,
+	})
 }
 
 func (h *Handler) SlowHealth(

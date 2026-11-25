@@ -1,51 +1,93 @@
-# Go binaries
+# =========================
+# Go binaries and build output
+# =========================
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-
-# Build output
+*.out
 bin/
 dist/
+build/
 
-# Test / coverage output
+# Compiled application binaries in project root
+/gateway
+/server
+
+# =========================
+# Go test and coverage output
+# =========================
 *.test
 coverage.out
 coverage.html
+*.prof
 
-# Environment files
+# =========================
+# Environment and secrets
+# =========================
 .env
 .env.*
 !.env.example
 
+# Private keys and certificates
+*.pem
+*.key
+*.p12
+*.pfx
+
+# =========================
 # Logs
+# =========================
 *.log
+logs/
 
-# OS files
-.DS_Store
-Thumbs.db
+# =========================
+# Test scripts and temporary test data
+# =========================
+test-*.sh
+test_*.sh
+testdata/
+test-output/
+test-results/
 
-# IDE / editor files
-.vscode/
-.idea/
-
+# =========================
 # Temporary files
+# =========================
 *.tmp
 *.temp
+*.swp
+*.bak
+*~
 
-# Go workspace
-go.work
-go.work.sum
-
+# =========================
 # Local data
+# =========================
 data/
 tmp/
 
 # Redis local data
 redis/data/
 
-# Test scripts and test files
-test-*.sh
-test_*.sh
-*_test.go
+# =========================
+# Docker local overrides
+# =========================
+docker-compose.override.yml
+
+# =========================
+# IDE and editor files
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# OS files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Go workspace files
+# =========================
+go.work
+go.work.sum

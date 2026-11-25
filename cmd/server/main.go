@@ -13,6 +13,7 @@ import (
 	"ecommerce-rate-limiter/config"
 	"ecommerce-rate-limiter/internal/handler"
 	"ecommerce-rate-limiter/internal/limiter"
+	"ecommerce-rate-limiter/internal/logging"
 	"ecommerce-rate-limiter/internal/store"
 )
 
@@ -41,7 +42,7 @@ func startLeaseRenewal(
 ) {
 	once.Do(func() {
 
-		ticker := time.NewTicker(3 * time.Second)
+		ticker := time.NewTicker(2 * time.Second)
 
 		go func() {
 			defer ticker.Stop()
@@ -67,18 +68,42 @@ func startLeaseRenewal(
 					instanceID,
 				)
 
+				// if err != nil {
+				// 	log.Printf(
+				// 		"Primary lease renewal failed: %v",
+				// 		err,
+				// 	)
+				// 	continue
+				// }
 				if err != nil {
-					log.Printf(
-						"Primary lease renewal failed: %v",
-						err,
+					_ = logging.Log(
+						"FAILOVER",
+						instanceID,
+						"service_recovered",
+						"WARN",
+						"primary lease renewal failed; switching to shadow",
+						map[string]string{
+							"layer":  "RATE-LIMITER",
+							"reason": "lease_renewal_error",
+							"error":  err.Error(),
+						},
 					)
+
+					setShadow()
 					continue
 				}
 
 				if !renewed {
-					log.Printf(
-						"Primary lease renewal rejected: instance %s no longer owns primary. Switching to shadow.",
+					_ = logging.Log(
+						"FAILOVER",
 						instanceID,
+						"service_recovered",
+						"WARN",
+						"primary lease ownership lost; switching to shadow",
+						map[string]string{
+							"layer":  "RATE-LIMITER",
+							"reason": "lease_rejected",
+						},
 					)
 
 					setShadow()
@@ -93,10 +118,10 @@ func startLeaseRenewal(
 				// 	continue
 				// }
 
-				log.Printf(
-					"Primary lease renewed by %s",
-					instanceID,
-				)
+				// log.Printf(
+				// 	"Primary lease renewed by %s",
+				// 	instanceID,
+				// )
 			}
 		}()
 	})
@@ -152,7 +177,14 @@ func main() {
 		)
 	}
 
-	log.Println("Connected to Redis")
+	_ = logging.Log(
+		"RATE-LIMITER",
+		cfg.InstanceID,
+		"service_recovered",
+		"INFO",
+		"Redis connection established",
+		nil,
+	)
 
 	// --------------------------------------------------
 	// Primary Ownership
@@ -180,20 +212,27 @@ func main() {
 		}
 
 		if !acquired {
-			currentPrimary, err := redisStore.GetPrimary(ctx)
+			// currentPrimary, err := redisStore.GetPrimary(ctx)
 
-			if err != nil {
-				log.Fatal(
-					"Failed to determine current primary:",
-					err,
-				)
-			}
+			// if err != nil {
+			// 	log.Fatal(
+			// 		"Failed to determine current primary:",
+			// 		err,
+			// 	)
+			// }
 
-			log.Printf(
-				"Another instance (%s) owns the primary lease. Starting as shadow.",
-				currentPrimary,
-			)
-
+			// _ = logging.Log(
+			// 	"FAILOVER",
+			// 	cfg.InstanceID,
+			// 	"service_recovered",
+			// 	"INFO",
+			// 	"starting as shadow",
+			// 	map[string]string{
+			// 		"current_primary": currentPrimary,
+			// 		"reason":          "primary_lease_already_owned",
+			// 		"layer":           "RATE-LIMITER",
+			// 	},
+			// )
 			cfg.Role = "shadow"
 		}
 
@@ -375,6 +414,36 @@ func main() {
 		h.SlowHealth,
 	)
 
+	// --------------------------------------------------
+	// Prometheus Metrics
+	// --------------------------------------------------
+
+	http.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+
+		role := h.GetRole()
+
+		active := 0
+
+		if role == "primary" {
+			active = 1
+		}
+
+		w.Header().Set(
+			"Content-Type",
+			"text/plain; version=0.0.4; charset=utf-8",
+		)
+
+		fmt.Fprintln(w, "# HELP rate_limiter_active Whether this rate limiter instance is active.")
+		fmt.Fprintln(w, "# TYPE rate_limiter_active gauge")
+
+		fmt.Fprintf(
+			w,
+			"rate_limiter_active{instance=%q,role=%q} %d\n",
+			cfg.InstanceID,
+			role,
+			active,
+		)
+	})
 	// --------------------------------------------------
 	// Server Information
 	// --------------------------------------------------

@@ -138,6 +138,8 @@ func forwardRequest(
 
 	// Preserve request headers.
 	upstreamRequest.Header = r.Header.Clone()
+	upstreamRequest.Header.Set("X-Request-ID", reqID)
+
 	upstreamRequest.Host = target.Host
 	upstreamRequest.ContentLength = r.ContentLength
 

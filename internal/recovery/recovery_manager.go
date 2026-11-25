@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"ecommerce-rate-limiter/internal/events"
+	"ecommerce-rate-limiter/internal/logging"
 )
 
 type FailureEvent struct {
@@ -84,7 +85,7 @@ func NewRecoveryManager(
 			),
 		),
 
-		InstanceID:        getEnv("RATE_LIMITER_INSTANCE_ID", "rate-limiter-secondary"),
+		InstanceID:        getEnv("RATE_LIMITER_INSTANCE_ID", "rate-limiter-shadow"),
 		PrimaryInstanceID: getEnv("PRIMARY_INSTANCE_ID", "rate-limiter-primary"),
 		MachineID:         getEnv("MACHINE_ID", "machine-01"),
 	}
@@ -141,6 +142,20 @@ func (rm *RecoveryManager) HandleFailure(
 
 	recoveryStartedAt := time.Now()
 
+	_ = logging.Log(
+		"FAILOVER",
+		"rate-limiter-recovery",
+		"failover_started",
+		"INFO",
+		"primary failure detected; shadow promotion initiated",
+		map[string]string{
+			"layer":           "RATE-LIMITER",
+			"failed_instance": rm.PrimaryInstanceID,
+			"target":          rm.InstanceID,
+			"failure_type":    failure.FailureType,
+		},
+	)
+
 	// Report that recovery has started.
 	rm.reportEvent(events.Event{
 		EventID:           fmt.Sprintf("recovery-started-%d", time.Now().UnixNano()),
@@ -191,6 +206,20 @@ func (rm *RecoveryManager) HandleFailure(
 		recoveryStartedAt,
 	).Milliseconds()
 
+	// _ = logging.Log(
+	// 	"FAILOVER",
+	// 	"rate-limiter-recovery",
+	// 	"failover_complete",
+	// 	"INFO",
+	// 	"shadow successfully promoted; primary role verified",
+	// 	map[string]string{
+	// 		"layer":             "RATE-LIMITER",
+	// 		"failed_instance":   rm.PrimaryInstanceID,
+	// 		"promoted_instance": rm.InstanceID,
+	// 		"duration_ms":       fmt.Sprint(recoveryTimeMS),
+	// 	},
+	// )
+
 	// Report verified promotion.
 	rm.reportEvent(events.Event{
 		EventID:             fmt.Sprintf("secondary-promoted-%d", time.Now().UnixNano()),
@@ -237,15 +266,131 @@ func (rm *RecoveryManager) HandleFailure(
 }
 
 // PromoteSecondary requests promotion and verifies the resulting role.
+// func (rm *RecoveryManager) PromoteSecondary() error {
+// 	maxAttempts := 8
+// 	retryDelay := 2 * time.Second
+
+// 	for attempt := 1; attempt <= maxAttempts; attempt++ {
+// 		fmt.Printf(
+// 			"Attempting secondary promotion (%d/%d)\n",
+// 			attempt,
+// 			maxAttempts,
+// 		)
+
+// 		req, err := http.NewRequest(
+// 			http.MethodPost,
+// 			rm.SecondaryURL+"/promote",
+// 			nil,
+// 		)
+// 		if err != nil {
+// 			return err
+// 		}
+
+// 		resp, err := rm.Client.Do(req)
+// 		if err != nil {
+// 			return fmt.Errorf(
+// 				"secondary promotion request failed: %w",
+// 				err,
+// 			)
+// 		}
+
+// 		resp.Body.Close()
+
+// 		if resp.StatusCode == http.StatusOK {
+// 			fmt.Println("Secondary promotion request accepted")
+
+// 			roleResp, err := rm.Client.Get(
+// 				rm.SecondaryURL + "/role",
+// 			)
+// 			if err != nil {
+// 				return fmt.Errorf(
+// 					"failed to verify secondary role: %w",
+// 					err,
+// 				)
+// 			}
+
+// 			var roleData struct {
+// 				Role   string `json:"role"`
+// 				Active bool   `json:"active"`
+// 			}
+
+// 			decodeErr := json.NewDecoder(roleResp.Body).Decode(&roleData)
+// 			roleResp.Body.Close()
+
+// 			if decodeErr != nil {
+// 				return fmt.Errorf(
+// 					"failed to decode secondary role: %w",
+// 					decodeErr,
+// 				)
+// 			}
+
+// 			if roleResp.StatusCode != http.StatusOK {
+// 				return fmt.Errorf(
+// 					"secondary role verification failed: status %d",
+// 					roleResp.StatusCode,
+// 				)
+// 			}
+
+// 			if roleData.Role != "primary" || !roleData.Active {
+// 				return fmt.Errorf(
+// 					"secondary promotion verification failed: role=%s active=%t",
+// 					roleData.Role,
+// 					roleData.Active,
+// 				)
+// 			}
+
+// 			fmt.Println("Secondary promotion verified successfully")
+// 			return nil
+// 		}
+
+// 		if resp.StatusCode == http.StatusConflict {
+// 			fmt.Printf(
+// 				"Promotion blocked by existing primary lease (%d/%d)\n",
+// 				attempt,
+// 				maxAttempts,
+// 			)
+
+// 			if attempt < maxAttempts {
+// 				time.Sleep(retryDelay)
+// 				continue
+// 			}
+
+// 			return fmt.Errorf(
+// 				"primary lease did not expire after %d attempts",
+// 				maxAttempts,
+// 			)
+// 		}
+
+// 		return fmt.Errorf(
+// 			"secondary promotion request failed: status %d",
+// 			resp.StatusCode,
+// 		)
+// 	}
+
+// 	return fmt.Errorf(
+// 		"secondary promotion failed after %d attempts",
+// 		maxAttempts,
+// 	)
+// }
+
 func (rm *RecoveryManager) PromoteSecondary() error {
-	maxAttempts := 5
+	maxAttempts := 8
 	retryDelay := 2 * time.Second
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		fmt.Printf(
-			"Attempting secondary promotion (%d/%d)\n",
-			attempt,
-			maxAttempts,
+
+		// Log each promotion attempt.
+		_ = logging.Log(
+			"FAILOVER",
+			"rate-limiter-recovery",
+			"promotion_attempt",
+			"INFO",
+			"attempting shadow promotion",
+			map[string]string{
+				"attempt":      fmt.Sprint(attempt),
+				"max_attempts": fmt.Sprint(maxAttempts),
+				"target":       rm.InstanceID,
+			},
 		)
 
 		req, err := http.NewRequest(
@@ -268,7 +413,18 @@ func (rm *RecoveryManager) PromoteSecondary() error {
 		resp.Body.Close()
 
 		if resp.StatusCode == http.StatusOK {
-			fmt.Println("Secondary promotion request accepted")
+
+			// Log promotion request acceptance.
+			_ = logging.Log(
+				"FAILOVER",
+				"rate-limiter-recovery",
+				"promotion_accepted",
+				"INFO",
+				"shadow accepted promotion request",
+				map[string]string{
+					"target": rm.InstanceID,
+				},
+			)
 
 			roleResp, err := rm.Client.Get(
 				rm.SecondaryURL + "/role",
@@ -310,15 +466,37 @@ func (rm *RecoveryManager) PromoteSecondary() error {
 				)
 			}
 
-			fmt.Println("Secondary promotion verified successfully")
+			// Log successful role verification.
+			_ = logging.Log(
+				"FAILOVER",
+				"rate-limiter-recovery",
+				"promotion_verified",
+				"INFO",
+				"shadow promotion verified successfully",
+				map[string]string{
+					"promoted_instance": rm.InstanceID,
+					"role":              roleData.Role,
+					"active":            fmt.Sprint(roleData.Active),
+				},
+			)
+
 			return nil
 		}
 
 		if resp.StatusCode == http.StatusConflict {
-			fmt.Printf(
-				"Promotion blocked by existing primary lease (%d/%d)\n",
-				attempt,
-				maxAttempts,
+
+			// Log promotion retry.
+			_ = logging.Log(
+				"FAILOVER",
+				"rate-limiter-recovery",
+				"promotion_retry",
+				"WARN",
+				"promotion blocked by existing primary lease",
+				map[string]string{
+					"attempt":      fmt.Sprint(attempt),
+					"max_attempts": fmt.Sprint(maxAttempts),
+					"target":       rm.InstanceID,
+				},
 			)
 
 			if attempt < maxAttempts {
@@ -356,7 +534,6 @@ func (rm *RecoveryManager) Start() error {
 		mux,
 	)
 }
-
 
 // package recovery
 
